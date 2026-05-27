@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1 — Builder
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libpq-dev \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY requirements.txt .
+
+RUN python -m venv /venv && \
+    /venv/bin/pip install --upgrade pip && \
+    /venv/bin/pip install --no-cache-dir -r requirements.txt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 — Runtime
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+# Node.js is required — ADK spawns npx @arizeai/phoenix-mcp as a subprocess
+# when PHOENIX_MODE=cloud or local. Not needed when PHOENIX_MODE=noop.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-install the Phoenix MCP package globally so npx doesn't download
+# it on every agent call — cold start would add ~5s per evaluation run
+RUN npm install -g @arizeai/phoenix-mcp
+
+# Non-root user
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/bash --create-home appuser
+
+WORKDIR /app
+
+COPY --from=builder /venv /venv
+COPY --chown=appuser:appgroup . .
+
+RUN mkdir -p /app/logs /app/temp && \
+    chown -R appuser:appgroup /app/logs /app/temp
+
+USER appuser
+
+ENV PATH="/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    # Tells npx to use the globally installed package — no download on run
+    NPM_CONFIG_PREFER_OFFLINE=true
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "main.py"]

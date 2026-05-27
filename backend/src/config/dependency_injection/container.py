@@ -116,7 +116,7 @@ def _make_observability(settings) -> PhoenixObservability | NoopObservability:
     return PhoenixObservability(
         project_name=settings.PHOENIX_PROJECT_NAME,
         # endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT,
-        collector_endpoint=settings.phoenix_endpoint,   # ← property
+        endpoint=settings.phoenix_endpoint,   # ← property
         api_key=settings.PHOENIX_API_KEY if settings.PHOENIX_MODE == "cloud" else None,
     )
 

@@ -1,0 +1,90 @@
+version: '3.8'
+
+# Clinical Copilot API - Docker Compose Configuration
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: clinical_copilot_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-clinical_copilot_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - clinical_copilot_network
+    restart: unless-stopped
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: clinical_copilot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - clinical_copilot_network
+    restart: unless-stopped
+
+  # Clinical Copilot API Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clinical_copilot_api
+    ports:
+      - "8000:8000"
+      - "9001:9001"
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=postgres
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - clinical_copilot_network
+    restart: unless-stopped
+
+# Networks
+networks:
+  clinical_copilot_network:
+    driver: bridge
+    name: clinical_copilot_network
+
+# Volumes
+volumes:
+  postgres_data:
+    name: clinical_copilot_postgres_data
+  redis_data:
+    name: clinical_copilot_redis_data

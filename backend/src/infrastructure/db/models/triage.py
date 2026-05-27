@@ -38,7 +38,7 @@ class TriageResultModel(Base):
 
     # Relationships
     intake = relationship("IntakeModel", back_populates="triage_result", lazy="noload")
-    patient = relationship("TriageResultModel", back_populates="triage_results", lazy="noload")
+    patient = relationship("PatientModel", back_populates="triage_results", lazy="noload") 
     brief = relationship(
         "PatientBriefModel",
         back_populates="triage_result",
