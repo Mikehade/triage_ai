@@ -1,38 +1,40 @@
-from __future__ import annotations
 from abc import ABC, abstractmethod
 
-from src.domain.evaluation.entities import EvalScore, FailurePattern, PromptImprovement
+from src.domain.evaluation.entities import EvalScore, PromptImprovement
 
 
 class IEvaluationService(ABC):
+    """
+    Persistence coordination for evaluation scores and prompt improvements.
+    Scoring logic, failure pattern identification, and prompt improvement
+    orchestration all live in EvaluateAgentUseCase, not here.
+    """
 
     @abstractmethod
-    async def evaluate_recent_traces(
+    async def save_score(self, score: EvalScore) -> EvalScore:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_score(self, span_id: str) -> EvalScore | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_rolling_average(self, days: int = 7) -> float:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_scores_below_threshold(
         self,
-        hours: int = 24,
+        threshold: float = 7.0,
     ) -> list[EvalScore]:
-        """Pull recent triage traces and score each with LLM-as-Judge."""
         raise NotImplementedError
 
     @abstractmethod
-    async def identify_failure_patterns(
-        self,
-        scores: list[EvalScore],
-    ) -> list[FailurePattern]:
-        """Cluster low-scoring traces into named failure patterns."""
+    async def save_improvement(self, improvement: PromptImprovement) -> PromptImprovement:
         raise NotImplementedError
 
     @abstractmethod
-    async def improve_prompt(
-        self,
-        patterns: list[FailurePattern],
-        rolling_avg: float,
-    ) -> PromptImprovement | None:
-        """
-        If rolling average is below threshold, rewrite the triage prompt
-        and upsert to Phoenix prompt registry.
-        Returns None if no improvement was needed.
-        """
+    async def get_latest_improvement(self, prompt_name: str) -> PromptImprovement | None:
         raise NotImplementedError
 
 

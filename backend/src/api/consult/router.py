@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -7,17 +8,20 @@ from src.config.dependency_injection.container import Container
 from src.application.generate_note import GenerateNoteUseCase
 from src.application.generate_referral import GenerateReferralUseCase
 from src.application.generate_discharge import GenerateDischargeUseCase
+from src.core.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
+from src.core.tools.documentation.draft_referral import DraftReferralTool
+from src.core.tools.documentation.draft_discharge import DraftDischargeTool
 from src.infrastructure.services.documentation_service import DocumentationService
-from src.infrastructure.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
-from src.infrastructure.tools.documentation.draft_referral import DraftReferralTool
-from src.infrastructure.tools.documentation.draft_discharge import DraftDischargeTool
 from src.api.consult.schemas import (
     GenerateNoteRequest,
+    GenerateNoteDebugRequest,
     SignNoteRequest,
     ClinicalNoteResponse,
     GenerateReferralRequest,
+    GenerateReferralDebugRequest,
     ReferralResponse,
     GenerateDischargeRequest,
+    GenerateDischargeDebugRequest,
     DischargeResponse,
 )
 from utils.logger import get_logger
@@ -87,7 +91,11 @@ async def sign_note(
     service: DocumentationService = Depends(Provide[Container.documentation_service]),
 ) -> ClinicalNoteResponse:
     try:
-        note = await service.sign_note(note_id=note_id, doctor_id=body.doctor_id)
+        note = await service.sign_note(
+            note_id=note_id,
+            doctor_id=body.doctor_id,
+            signed_at=datetime.now(timezone.utc),
+        )
         return _note_to_response(note)
     except Exception as e:
         logger.error(f"sign_note failed: {e}", exc_info=True)
@@ -205,17 +213,24 @@ async def debug_draft_note(
     "/debug/referral-tool",
     response_model=ReferralResponse,
     summary="DEBUG: Call draft referral tool directly",
+    description=(
+        "DEBUG: Call the draft referral tool in isolation. "
+        "Requires explicit patient_id, note_summary, clinical_note_id "
+        "since the use case normally fetches these from the DB."
+    ),
 )
 @inject
 async def debug_draft_referral(
-    body: GenerateReferralRequest,
+    body: GenerateReferralDebugRequest,
     tool: DraftReferralTool = Depends(Provide[Container.draft_referral_tool]),
 ) -> ReferralResponse:
     try:
         referral = await tool.execute(
             clinical_note_id=body.clinical_note_id,
+            patient_id=body.patient_id,
             receiving_facility=body.receiving_facility,
             reason=body.reason,
+            note_summary=body.note_summary,
         )
         return ReferralResponse(
             id=referral.id,
@@ -238,16 +253,23 @@ async def debug_draft_referral(
     "/debug/discharge-tool",
     response_model=DischargeResponse,
     summary="DEBUG: Call draft discharge tool directly",
+    description=(
+        "DEBUG: Call the draft discharge tool in isolation. "
+        "Requires explicit patient_id and note_summary since the use "
+        "case normally fetches these from the DB."
+    ),
 )
 @inject
 async def debug_draft_discharge(
-    body: GenerateDischargeRequest,
+    body: GenerateDischargeDebugRequest,
     tool: DraftDischargeTool = Depends(Provide[Container.draft_discharge_tool]),
 ) -> DischargeResponse:
     try:
         discharge = await tool.execute(
             clinical_note_id=body.clinical_note_id,
+            patient_id=body.patient_id,
             medications=body.medications,
+            note_summary=body.note_summary,
             follow_up=body.follow_up,
         )
         return DischargeResponse(

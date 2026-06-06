@@ -38,12 +38,12 @@ class Settings(BaseSettings):
 
     # ── GCP ───────────────────────────────────────────────────────────────────
     GCP_PROJECT: Optional[str] = Field(default="", validation_alias="GCP_PROJECT")
-    GCP_LOCATION: Optional[str] = Field(default="us-central-1", validation_alias="GCP_LOCATION")
+    GCP_LOCATION: Optional[str] = Field(default="global", validation_alias="GCP_LOCATION")
     VERTEX_DATASTORE_ID: Optional[str] = Field(default="", validation_alias="VERTEX_DATASTORE_ID")
 
     # ── Phoenix ───────────────────────────────────────────────────────────────
     # "cloud" | "local" | "noop"
-    PHOENIX_MODE: Optional[str] = Field(default="local", validation_alias="PHOENIX_MODE")
+    PHOENIX_MODE: Optional[str] = Field(default="noop", validation_alias="PHOENIX_MODE")
     PHOENIX_API_KEY: Optional[str] = Field(default="", validation_alias="PHOENIX_API_KEY")
     PHOENIX_PROJECT_NAME: Optional[str] = Field(default="clinical-copilot", validation_alias="PHOENIX_API_KEY") #: str = "clinical-copilot"
     PHOENIX_CLOUD_ENDPOINT: str = "https://app.phoenix.arize.com"

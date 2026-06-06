@@ -5,12 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.config.dependency_injection.container import Container
 from src.application.triage_patient import TriagePatientUseCase
-from src.infrastructure.tools.triage.urgency_score import UrgencyScoreTool
-from src.infrastructure.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
-from src.infrastructure.tools.triage.drug_interaction_check import DrugInteractionTool
+from src.core.tools.triage.urgency_score import UrgencyScoreTool
+from src.core.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
+from src.core.tools.triage.drug_interaction_check import DrugInteractionTool
 from src.infrastructure.services.triage_service import TriageService
-from src.infrastructure.language_models.base import Message, MessageRole, LLMConfig
-from src.infrastructure.language_models.base import ILLMClient
+from src.infrastructure.language_models.base import Message, MessageRole, ILLMClient
 from src.api.triage.schemas import (
     TriageResultResponse,
     BriefResponse,

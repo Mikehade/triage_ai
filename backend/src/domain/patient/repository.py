@@ -25,8 +25,29 @@ class IPatientRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def list_active(self) -> list[Patient]:
-        """All non-discharged, non-deleted patients — the active queue."""
+    async def list_active(
+        self,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Patient], int]:
+        """
+        All non-discharged, non-deleted patients ordered by intake time.
+        Returns (page of patients, total matching count).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def search(
+        self,
+        query: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Patient], int]:
+        """
+        Search patients by name or phone number.
+        Returns (matching patients for this page, total matching count).
+        Total count is used by the service to compute total_pages.
+        """
         raise NotImplementedError
 
     @abstractmethod
