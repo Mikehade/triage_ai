@@ -13,7 +13,7 @@ fitz==0.0.1.dev2
 pypdf==6.8.0
 json-repair==0.58.5
 docx2pdf==0.1.8
-websockets==16.0
+websockets==15.0.1
 pydub==0.25.1
 pdf2image==1.17.0
 pdfplumber==0.11.9
