@@ -27,8 +27,9 @@ openai==2.38.0
 mcp==1.27.1
 # openinference-instrumentation-google-adk==0.1.15
 arize-phoenix==16.0.0
-google-cloud-discoveryengine==0.19.0
+# google-cloud-discoveryengine==0.19.0
 # google-adk==1.32.0
+google-cloud-discoveryengine==0.19.0
 google-adk==1.32.0
 openinference-instrumentation-google-adk==0.1.15
 asyncpg==0.31.0
