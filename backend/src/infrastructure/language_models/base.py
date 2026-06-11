@@ -24,7 +24,7 @@ class LLMConfig:
     Each provider adapter maps these to its own parameter names.
     """
     temperature: float = 0.2        # low by default — clinical context needs consistency
-    max_output_tokens: int = 2048
+    max_output_tokens: int = 8192
     top_p: float = 0.95
     top_k: int = 40
     candidate_count: int = 1

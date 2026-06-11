@@ -1,5 +1,11 @@
+"""
+Draft Clinical Note Tool.
+Drafts a structured SOAP clinical note from a consultation transcript
+and triage data using an LLM.
+"""
+from abc import abstractmethod
 from datetime import datetime, timezone
-from uuid import uuid4, UUID
+from uuid import UUID, uuid4
 
 from src.core.tools.base import ITool
 from src.domain.documentation.entities import ClinicalNote
@@ -43,7 +49,21 @@ Draft the SOAP note.
 """
 
 
-class DraftClinicalNoteTool(ITool):
+class IDraftClinicalNoteTool(ITool):
+    """Interface for the draft clinical note tool."""
+
+    @abstractmethod
+    async def execute(
+        self,
+        patient_id: UUID,
+        triage_result_id: UUID,
+        transcript: str | None = None,
+        doctor_additions: str | None = None,
+    ) -> ClinicalNote:
+        raise NotImplementedError
+
+
+class DraftClinicalNoteTool(IDraftClinicalNoteTool):
 
     def __init__(self, llm: ILLMClient):
         self._llm = llm

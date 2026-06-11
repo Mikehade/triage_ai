@@ -1,9 +1,12 @@
+import json
 from typing import Callable
+from uuid import UUID
 
-from src.infrastructure.tools.triage.urgency_score import UrgencyScoreTool
-from src.infrastructure.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
-from src.infrastructure.tools.triage.drug_interaction_check import DrugInteractionTool
-from src.infrastructure.tools.triage.assemble_brief import AssembleBriefTool
+from src.core.tools.triage.urgency_score import UrgencyScoreTool
+from src.core.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
+from src.core.tools.triage.drug_interaction_check import DrugInteractionTool
+from src.core.tools.triage.assemble_brief import AssembleBriefTool
+from src.domain.triage.entities import PatientBrief
 
 
 def make_urgency_score_tool(tool: UrgencyScoreTool) -> Callable:
@@ -69,16 +72,19 @@ def make_differential_diagnosis_tool(tool: DifferentialDiagnosisTool) -> Callabl
             symptom_duration_hours=symptom_duration_hours,
             additional_history=additional_history,
         )
+        # Serialise each differential to a JSON string.
+        # Gemini rejects list[dict] parameters due to additionalProperties
+        # in the generated schema — list[str] is safe and unambiguous.
         return {
-            "differentials": [
-                {
+            "differentials_json": [
+                json.dumps({
                     "rank": d.rank,
                     "condition": d.condition,
                     "confidence": d.confidence,
                     "reasoning": d.reasoning,
                     "distinguishing_questions": d.distinguishing_questions,
                     "icd10_code": d.icd10_code,
-                }
+                })
                 for d in results
             ],
             "count": len(results),
@@ -105,15 +111,16 @@ def make_drug_interaction_tool(tool: DrugInteractionTool) -> Callable:
             current_medications=current_medications,
             likely_prescriptions=likely_prescriptions or [],
         )
+        # Serialise each flag to a JSON string — same reason as differentials.
         return {
-            "flags": [
-                {
+            "drug_flags_json": [
+                json.dumps({
                     "drug_a": f.drug_a,
                     "drug_b": f.drug_b,
                     "severity": f.severity,
                     "description": f.description,
                     "recommendation": f.recommendation,
-                }
+                })
                 for f in flags
             ],
             "flag_count": len(flags),
@@ -123,80 +130,109 @@ def make_drug_interaction_tool(tool: DrugInteractionTool) -> Callable:
     return drug_interaction_check
 
 
-def make_assemble_brief_tool(tool: AssembleBriefTool) -> Callable:
+def make_assemble_brief_tool(
+    tool: AssembleBriefTool,
+    patient_id: UUID,
+    intake_id: UUID,
+    brief_sink: list,
+) -> Callable:
+    """
+    patient_id and intake_id are closed over from the agent instance.
+    brief_sink is a single-element list used as a mutable container so
+    the assembled PatientBrief can be retrieved by the use case after
+    the agent run completes — without any DB write happening inside the tool.
+
+    Sequence enforced by the use case:
+      1. agent.run() → assemble_brief → brief_sink[0] = brief
+      2. triage_service.save_result(triage_result)   ← triage_result_id committed
+      3. triage_service.save_brief(brief_sink[0])    ← FK satisfied
+    """
     async def assemble_brief(
-        chief_complaint: str,
         urgency_level: int,
         urgency_reasoning: str,
         red_flags: list[str],
-        differentials: list[dict],
-        drug_flags: list[dict],
+        differentials_json: list[str],
+        drug_flags_json: list[str],
+        grounding_sources: list[str] | None = None,
     ) -> dict:
         """
         Assemble all triage outputs into a structured 60-second doctor handoff card.
         Call this after urgency_score, differential_diagnosis, and drug_interaction_check
         have all completed. Do not call this tool before the others.
 
+        Pass differentials_json from differential_diagnosis output.
+        Pass drug_flags_json from drug_interaction_check output.
+
         Args:
-            chief_complaint: The patient's primary complaint.
             urgency_level: Integer urgency level from urgency_score (1-5).
             urgency_reasoning: Reasoning string from urgency_score.
             red_flags: Red flag list from urgency_score.
-            differentials: Differential list from differential_diagnosis.
-            drug_flags: Drug flag list from drug_interaction_check.
+            differentials_json: JSON-serialised differential list from differential_diagnosis.
+            drug_flags_json: JSON-serialised drug flag list from drug_interaction_check.
+            grounding_sources: Optional list of knowledge sources cited.
         """
-        from src.domain.patient.value_objects import UrgencyLevel, DifferentialDiagnosis, DrugFlag
-        from src.domain.triage.entities import TriageResult, UrgencyScore
         from datetime import datetime, timezone
         from uuid import uuid4
 
-        # Reconstruct domain objects from the dict inputs ADK passes
+        from src.domain.patient.value_objects import UrgencyLevel, DifferentialDiagnosis, DrugFlag
+        from src.domain.triage.entities import TriageResult, UrgencyScore
+
         urgency = UrgencyScore(
             level=UrgencyLevel(urgency_level),
             reasoning=urgency_reasoning,
-            red_flags=red_flags,
+            red_flags=red_flags or [],
             computed_at=datetime.now(timezone.utc),
         )
 
-        differential_objs = [
-            DifferentialDiagnosis(
-                rank=d["rank"],
-                condition=d["condition"],
-                confidence=d["confidence"],
-                reasoning=d["reasoning"],
-                distinguishing_questions=d.get("distinguishing_questions", []),
-                icd10_code=d.get("icd10_code"),
-            )
-            for d in differentials
-        ]
+        differential_objs = []
+        for item in (differentials_json or []):
+            try:
+                d = json.loads(item) if isinstance(item, str) else item
+                differential_objs.append(DifferentialDiagnosis(
+                    rank=d.get("rank"),
+                    condition=d.get("condition"),
+                    confidence=float(d.get("confidence", 0.0)),
+                    reasoning=d.get("reasoning", ""),
+                    distinguishing_questions=d.get("distinguishing_questions", []),
+                    icd10_code=d.get("icd10_code"),
+                ))
+            except (json.JSONDecodeError, TypeError):
+                continue
 
-        drug_flag_objs = [
-            DrugFlag(
-                drug_a=f["drug_a"],
-                drug_b=f["drug_b"],
-                severity=f["severity"],
-                description=f["description"],
-                recommendation=f["recommendation"],
-            )
-            for f in drug_flags
-        ]
+        drug_flag_objs = []
+        for item in (drug_flags_json or []):
+            try:
+                f = json.loads(item) if isinstance(item, str) else item
+                drug_flag_objs.append(DrugFlag(
+                    drug_a=f.get("drug_a", ""),
+                    drug_b=f.get("drug_b", ""),
+                    severity=f.get("severity", "mild"),
+                    description=f.get("description", ""),
+                    recommendation=f.get("recommendation", ""),
+                ))
+            except (json.JSONDecodeError, TypeError):
+                continue
 
-        # Minimal TriageResult for AssembleBriefTool
-        triage_result = TriageResult(
-            id=uuid4(),
-            intake_id=uuid4(),
-            patient_id=uuid4(),
+        # Build a transient TriageResult for the brief assembly LLM call.
+        # This is NOT persisted — the real triage_result_id is injected
+        # by the use case after save_result() commits the real record.
+        transient_result = TriageResult(
+            id=uuid4(),          # placeholder — overwritten by use case
+            intake_id=intake_id,
+            patient_id=patient_id,
             urgency=urgency,
             differentials=differential_objs,
             drug_flags=drug_flag_objs,
-            grounding_sources=[],
+            grounding_sources=grounding_sources or [],
             computed_at=datetime.now(timezone.utc),
         )
 
-        brief = await tool.execute(
-            triage_result=triage_result,
-            chief_complaint=chief_complaint,
-        )
+        # Tool returns PatientBrief but does NOT persist it.
+        brief: PatientBrief = await tool.execute(triage_result=transient_result)
+
+        # Store in sink so use case can retrieve it after persisting triage_result.
+        brief_sink.clear()
+        brief_sink.append(brief)
 
         return {
             "urgency_level": brief.urgency_level.value,

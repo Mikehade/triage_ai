@@ -1,11 +1,16 @@
+"""
+Urgency Score Tool.
+Assesses clinical urgency of a patient presentation using an LLM
+grounded in Nigerian FMOH and WHO guidelines via the knowledge service.
+"""
+from abc import abstractmethod
 from datetime import datetime, timezone
 
 from src.core.tools.base import ITool
+from src.domain.knowledge.service import IKnowledgeService
 from src.domain.patient.value_objects import UrgencyLevel
 from src.domain.triage.entities import UrgencyScore
-from src.domain.triage.service import IUrgencyScoreTool
 from src.infrastructure.language_models.base import ILLMClient, Message, MessageRole, LLMConfig
-from src.infrastructure.knowledge.base import IKnowledgeStore
 from utils.logger import get_logger
 
 logger = get_logger()
@@ -50,16 +55,33 @@ Assess urgency and respond with the required JSON.
 """
 
 
-class UrgencyScoreTool(IUrgencyScoreTool, ITool):
+class IUrgencyScoreTool(ITool):
+    """
+    Interface for the urgency scoring tool.
+    Exposed so the debug endpoint can depend on the abstraction.
+    """
+
+    @abstractmethod
+    async def execute(
+        self,
+        chief_complaint: str,
+        symptom_duration_hours: int,
+        vitals_summary: str | None = None,
+        red_flag_symptoms: list[str] | None = None,
+    ) -> UrgencyScore:
+        raise NotImplementedError
+
+
+class UrgencyScoreTool(IUrgencyScoreTool):
 
     def __init__(
         self,
         llm: ILLMClient,
-        knowledge_store: IKnowledgeStore,
+        knowledge_service: IKnowledgeService,
         improvement_notes: str | None = None,
     ):
         self._llm = llm
-        self._knowledge_store = knowledge_store
+        self._knowledge_service = knowledge_service
         self._improvement_notes = improvement_notes or ""
 
     @property
@@ -84,9 +106,8 @@ class UrgencyScoreTool(IUrgencyScoreTool, ITool):
         red_flag_symptoms = red_flag_symptoms or []
         vitals_text = vitals_summary or "Not provided"
 
-        # Retrieve relevant guidelines from knowledge store
         try:
-            guidelines = await self._knowledge_store.search(
+            guidelines = await self._knowledge_service.search(
                 query=f"triage urgency {chief_complaint}",
                 top_k=3,
             )
@@ -95,7 +116,10 @@ class UrgencyScoreTool(IUrgencyScoreTool, ITool):
                 for g in guidelines
             )
         except Exception as e:
-            logger.warning(f"Knowledge store unavailable: {e}. Proceeding without guidelines.")
+            logger.warning(
+                f"UrgencyScoreTool: knowledge service unavailable: {e}. "
+                "Proceeding without guidelines."
+            )
             guidelines_text = "Guidelines unavailable."
 
         improvement_section = (

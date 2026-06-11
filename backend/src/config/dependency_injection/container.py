@@ -1,4 +1,13 @@
-from __future__ import annotations
+"""
+Dependency Injection Container.
+Wires the full application graph — infrastructure up through use cases.
+
+Dependency direction enforced here:
+  Repository ← Service ← Use Case ← Router
+  Tool ← Agent ← Use Case
+  KnowledgeService ← Tool
+  PromptRegistry ← Use Case
+"""
 from dependency_injector import containers, providers
 
 from src.config.base import get_settings
@@ -13,7 +22,6 @@ from src.infrastructure.cache.redis_service import CacheService
 
 # LLM
 from src.infrastructure.language_models.gemini import GeminiClient
-# from src.infrastructure.language_models.openai import OpenAIClient
 
 # MCP
 from src.infrastructure.mcp.phoenix_mcp import PhoenixMCPClient
@@ -26,6 +34,7 @@ from src.infrastructure.observability.noop import NoopObservability
 
 # Knowledge
 from src.infrastructure.knowledge.vertex_datastore import VertexKnowledgeStore
+from src.infrastructure.knowledge.knowledge_service import KnowledgeService
 
 # Repositories
 from src.infrastructure.repository.patient_repository import (
@@ -46,18 +55,18 @@ from src.infrastructure.repository.evaluation_repository import (
     PromptImprovementRepository,
 )
 
-# Tools — triage
-from src.infrastructure.tools.triage.urgency_score import UrgencyScoreTool
-from src.infrastructure.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
-from src.infrastructure.tools.triage.drug_interaction_check import DrugInteractionTool
-from src.infrastructure.tools.triage.assemble_brief import AssembleBriefTool
+# Tools — triage (core)
+from src.core.tools.triage.urgency_score import UrgencyScoreTool
+from src.core.tools.triage.differential_diagnosis import DifferentialDiagnosisTool
+from src.core.tools.triage.drug_interaction_check import DrugInteractionTool
+from src.core.tools.triage.assemble_brief import AssembleBriefTool
 
-# Tools — documentation
-from src.infrastructure.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
-from src.infrastructure.tools.documentation.draft_referral import DraftReferralTool
-from src.infrastructure.tools.documentation.draft_discharge import DraftDischargeTool
+# Tools — documentation (core)
+from src.core.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
+from src.core.tools.documentation.draft_referral import DraftReferralTool
+from src.core.tools.documentation.draft_discharge import DraftDischargeTool
 
-# Tools — evaluation
+# Tools — evaluation (infrastructure — depend on MCP)
 from src.infrastructure.tools.evaluation.get_traces import GetTracesTool
 from src.infrastructure.tools.evaluation.get_annotations import GetAnnotationsTool
 from src.infrastructure.tools.evaluation.upsert_prompt import UpsertPromptTool
@@ -77,36 +86,17 @@ from src.application.generate_note import GenerateNoteUseCase
 from src.application.generate_referral import GenerateReferralUseCase
 from src.application.generate_discharge import GenerateDischargeUseCase
 from src.application.evaluate_agent import EvaluateAgentUseCase
+from src.application.get_patient import GetPatientUseCase
+from src.application.list_patients import ListPatientsUseCase
 
 
 def _make_mcp_client(settings) -> PhoenixMCPClient | NoopMCPClient:
-    """
-    Return NoopMCPClient when PHOENIX_MODE=noop.
-    Allows full local development without npx or Phoenix Cloud.
-    """
     if settings.PHOENIX_MODE == "noop":
         return NoopMCPClient()
     return PhoenixMCPClient(
         api_key=settings.PHOENIX_API_KEY,
-        # collector_endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT,
-        collector_endpoint=settings.phoenix_endpoint,   # ← property
+        collector_endpoint=settings.phoenix_endpoint,
         project_name=settings.PHOENIX_PROJECT_NAME,
-    )
-
-
-def _make_llm_client(settings) -> GeminiClient: #| OpenAIClient:
-    """
-    Return the configured LLM provider.
-    Swap LLM_PROVIDER=openai to switch — zero code changes.
-    """
-    # if settings.LLM_PROVIDER == "openai":
-    #     return OpenAIClient(
-    #         api_key=settings.OPENAI_API_KEY,
-    #         model=settings.OPENAI_MODEL,
-    #     )
-    return GeminiClient(
-        api_key=settings.GEMINI_API_KEY,
-        model=settings.GEMINI_MODEL,
     )
 
 
@@ -115,8 +105,7 @@ def _make_observability(settings) -> PhoenixObservability | NoopObservability:
         return NoopObservability()
     return PhoenixObservability(
         project_name=settings.PHOENIX_PROJECT_NAME,
-        # endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT,
-        endpoint=settings.phoenix_endpoint,   # ← property
+        endpoint=settings.phoenix_endpoint,
         api_key=settings.PHOENIX_API_KEY if settings.PHOENIX_MODE == "cloud" else None,
     )
 
@@ -181,7 +170,6 @@ class Container(containers.DeclarativeContainer):
     )
 
     # ── Observability ─────────────────────────────────────────────────────────
-    # Singleton — instrumentation registered once at startup
 
     observability = providers.Singleton(
         _make_observability,
@@ -189,28 +177,33 @@ class Container(containers.DeclarativeContainer):
     )
 
     # ── LLM ───────────────────────────────────────────────────────────────────
-    # Singleton — one authenticated client, shared across all tools
 
     llm_client = providers.Singleton(
-        _make_llm_client,
-        settings=config,
+        GeminiClient,
+        api_key=providers.Callable(lambda cfg: cfg.GEMINI_API_KEY, config),
+        model=providers.Callable(lambda cfg: cfg.GEMINI_MODEL, config),
     )
 
     # ── MCP ───────────────────────────────────────────────────────────────────
-    # Singleton — one MCP client, shared across all evaluation tools
 
     mcp_client = providers.Singleton(
         _make_mcp_client,
         settings=config,
     )
 
-    # ── Knowledge store ───────────────────────────────────────────────────────
+    # ── Knowledge ─────────────────────────────────────────────────────────────
+    # Singleton — one authenticated datastore client shared across all tools
 
     knowledge_store = providers.Singleton(
         VertexKnowledgeStore,
         project=providers.Callable(lambda cfg: cfg.GCP_PROJECT, config),
         location=providers.Callable(lambda cfg: cfg.GCP_LOCATION, config),
         datastore_id=providers.Callable(lambda cfg: cfg.VERTEX_DATASTORE_ID, config),
+    )
+
+    knowledge_service = providers.Singleton(
+        KnowledgeService,
+        knowledge_store=knowledge_store,
     )
 
     # ── Prompt registry ───────────────────────────────────────────────────────
@@ -221,7 +214,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     # ── Repositories ──────────────────────────────────────────────────────────
-    # Factory — new instance per request, session_factory from db_engine
+    # Factory — fresh session per request
 
     patient_repository = providers.Factory(
         PatientRepository,
@@ -268,30 +261,60 @@ class Container(containers.DeclarativeContainer):
         session_factory=db_engine.provided.session,
     )
 
+    # ── Services ──────────────────────────────────────────────────────────────
+    # Factory — pure repo wrappers, no agents or tools
+
+    patient_service = providers.Factory(
+        PatientService,
+        patient_repo=patient_repository,
+        intake_repo=intake_repository,
+    )
+
+    triage_service = providers.Factory(
+        TriageService,
+        triage_result_repo=triage_result_repository,
+        brief_repo=patient_brief_repository,
+    )
+
+    documentation_service = providers.Factory(
+        DocumentationService,
+        note_repo=clinical_note_repository,
+        referral_repo=referral_repository,
+        discharge_repo=discharge_repository,
+    )
+
+    evaluation_service = providers.Factory(
+        EvaluationService,
+        eval_score_repo=eval_score_repository,
+        prompt_improvement_repo=prompt_improvement_repository,
+    )
+
     # ── Triage tools ──────────────────────────────────────────────────────────
-    # Factory — improvement_notes fetched fresh per triage run
+    # Factory — built fresh per request
+    # AssembleBriefTool takes triage_service to persist the brief it produces
 
     urgency_score_tool = providers.Factory(
         UrgencyScoreTool,
         llm=llm_client,
-        knowledge_store=knowledge_store,
+        knowledge_service=knowledge_service,
     )
 
     differential_tool = providers.Factory(
         DifferentialDiagnosisTool,
         llm=llm_client,
-        knowledge_store=knowledge_store,
+        knowledge_service=knowledge_service,
     )
 
     drug_interaction_tool = providers.Factory(
         DrugInteractionTool,
         llm=llm_client,
-        knowledge_store=knowledge_store,
+        knowledge_service=knowledge_service,
     )
 
     assemble_brief_tool = providers.Factory(
         AssembleBriefTool,
         llm=llm_client,
+        # triage_service=triage_service,
     )
 
     # ── Documentation tools ───────────────────────────────────────────────────
@@ -354,7 +377,7 @@ class Container(containers.DeclarativeContainer):
     )
 
     # ── Agents ────────────────────────────────────────────────────────────────
-    # Factory — built fresh per request via agent_factory methods
+    # Factory — built fresh per request via agent_factory
 
     triage_agent = providers.Factory(
         providers.Callable(
@@ -377,76 +400,59 @@ class Container(containers.DeclarativeContainer):
         )
     )
 
-    # ── Services ──────────────────────────────────────────────────────────────
-    # Factory — receive repos and agents, new instance per request
-
-    patient_service = providers.Factory(
-        PatientService,
-        patient_repo=patient_repository,
-        intake_repo=intake_repository,
-    )
-
-    triage_service = providers.Factory(
-        TriageService,
-        triage_agent=triage_agent,
-        triage_result_repo=triage_result_repository,
-        brief_repo=patient_brief_repository,
-        prompt_registry=prompt_registry,
-    )
-
-    documentation_service = providers.Factory(
-        DocumentationService,
-        documentation_agent=documentation_agent,
-        note_tool=draft_note_tool,
-        referral_tool=draft_referral_tool,
-        discharge_tool=draft_discharge_tool,
-        note_repo=clinical_note_repository,
-        referral_repo=referral_repository,
-        discharge_repo=discharge_repository,
-    )
-
-    evaluation_service = providers.Factory(
-        EvaluationService,
-        evaluator_agent=evaluator_agent,
-        get_traces_tool=get_traces_tool,
-        get_annotations_tool=get_annotations_tool,
-        llm=llm_client,
-        prompt_registry=prompt_registry,
-        eval_score_repo=eval_score_repository,
-        prompt_improvement_repo=prompt_improvement_repository,
-        prompt_name=providers.Callable(
-            lambda cfg: cfg.PHOENIX_TRIAGE_PROMPT_NAME, config
-        ),
-    )
-
     # ── Use cases ─────────────────────────────────────────────────────────────
-    # Factory — receive services, new instance per request
+    # Factory — own orchestration, receive agents + services
 
     triage_patient_use_case = providers.Factory(
         TriagePatientUseCase,
+        triage_agent=triage_agent,
+        prompt_registry=prompt_registry,
         patient_service=patient_service,
         triage_service=triage_service,
     )
 
+    get_patient_use_case = providers.Factory(
+        GetPatientUseCase,
+        patient_service=patient_service,
+        triage_service=triage_service,
+    )
+ 
+    list_patients_use_case = providers.Factory(
+        ListPatientsUseCase,
+        patient_service=patient_service,
+        triage_service=triage_service,
+    )
+    
+
     generate_note_use_case = providers.Factory(
         GenerateNoteUseCase,
+        note_tool=draft_note_tool,
         documentation_service=documentation_service,
         patient_service=patient_service,
     )
 
     generate_referral_use_case = providers.Factory(
         GenerateReferralUseCase,
+        referral_tool=draft_referral_tool,
         documentation_service=documentation_service,
         patient_service=patient_service,
     )
 
     generate_discharge_use_case = providers.Factory(
         GenerateDischargeUseCase,
+        discharge_tool=draft_discharge_tool,
         documentation_service=documentation_service,
         patient_service=patient_service,
     )
 
     evaluate_agent_use_case = providers.Factory(
         EvaluateAgentUseCase,
+        llm=llm_client,
+        get_traces_tool=get_traces_tool,
+        get_annotations_tool=get_annotations_tool,
+        prompt_registry=prompt_registry,
         evaluation_service=evaluation_service,
+        prompt_name=providers.Callable(
+            lambda cfg: cfg.PHOENIX_TRIAGE_PROMPT_NAME, config
+        ),
     )

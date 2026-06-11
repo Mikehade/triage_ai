@@ -1,9 +1,9 @@
 from typing import Callable
 from uuid import UUID
 
-from src.infrastructure.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
-from src.infrastructure.tools.documentation.draft_referral import DraftReferralTool
-from src.infrastructure.tools.documentation.draft_discharge import DraftDischargeTool
+from src.core.tools.documentation.draft_clinical_note import DraftClinicalNoteTool
+from src.core.tools.documentation.draft_referral import DraftReferralTool
+from src.core.tools.documentation.draft_discharge import DraftDischargeTool
 
 
 def make_draft_note_tool(tool: DraftClinicalNoteTool) -> Callable:

@@ -3,10 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.config.dependency_injection.container import Container
 from src.application.evaluate_agent import EvaluateAgentUseCase
+from src.domain.evaluation.service import IPromptRegistry
 from src.infrastructure.tools.evaluation.get_traces import GetTracesTool
 from src.infrastructure.tools.evaluation.get_annotations import GetAnnotationsTool
 from src.infrastructure.tools.evaluation.upsert_prompt import UpsertPromptTool
-from src.infrastructure.services.evaluation_service import EvaluationService
 from src.api.evaluation.schemas import (
     EvalRunResponse,
     EvalScoreItem,
@@ -156,10 +156,10 @@ async def debug_get_annotations(
 @inject
 async def debug_get_prompt(
     prompt_name: str,
-    service: EvaluationService = Depends(Provide[Container.evaluation_service]),
+    prompt_registry: IPromptRegistry = Depends(Provide[Container.prompt_registry]),
 ) -> PromptFetchResponse:
     try:
-        content = await service.get_current_prompt(prompt_name)
+        content = await prompt_registry.get_current_prompt(prompt_name)
         return PromptFetchResponse(prompt_name=prompt_name, content=content)
     except Exception as e:
         logger.error(f"debug_get_prompt failed: {e}", exc_info=True)

@@ -1,14 +1,8 @@
 from dataclasses import dataclass, field
 from uuid import UUID
-from typing import Any
 
 from src.core.agents.base import AgentInput, AgentOutput
 from src.domain.patient.entities import Intake
-from src.domain.patient.value_objects import (
-    UrgencyLevel,
-    DifferentialDiagnosis,
-    DrugFlag,
-)
 from src.domain.triage.entities import TriageResult, PatientBrief
 from src.domain.documentation.entities import (
     ClinicalNote,
@@ -29,7 +23,14 @@ class TriageAgentInput(AgentInput):
 @dataclass
 class TriageAgentOutput(AgentOutput):
     result: TriageResult | None = None
+    # Assembled by AssembleBriefTool during the agent run.
+    # None if the agent did not reach the assemble_brief step.
+    # The use case persists this AFTER saving result to satisfy the FK constraint:
+    #   triage_service.save_result(result)   ← commits triage_result_id
+    #   triage_service.save_brief(brief)     ← FK now satisfied
     brief: PatientBrief | None = None
+    raw: str = ""
+    metadata: dict = field(default_factory=dict)
 
 
 # ── Documentation agent ───────────────────────────────────────────────────────
@@ -56,14 +57,16 @@ class DocumentationAgentOutput(AgentOutput):
     note: ClinicalNote | None = None
     referral: ReferralLetter | None = None
     discharge: DischargeSummary | None = None
+    raw: str = ""
+    metadata: dict = field(default_factory=dict)
 
 
 # ── Evaluator agent ───────────────────────────────────────────────────────────
 
 @dataclass
 class EvaluatorAgentInput(AgentInput):
-    hours: int = 24                        # lookback window for trace retrieval
-    threshold: float = 7.0                # composite score below which improvement triggers
+    hours: int = 24                         # lookback window for trace retrieval
+    threshold: float = 7.0                 # composite score below which improvement triggers
     prompt_name: str = "triage-system-prompt"
 
 
@@ -73,3 +76,5 @@ class EvaluatorAgentOutput(AgentOutput):
     patterns: list[FailurePattern] = field(default_factory=list)
     rolling_avg: float = 0.0
     improvement: PromptImprovement | None = None
+    raw: str = ""
+    metadata: dict = field(default_factory=dict)

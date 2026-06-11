@@ -1,58 +1,85 @@
+"""
+Differential Diagnosis Tool.
+Generates a ranked list of likely diagnoses for a patient presentation
+using an LLM grounded in Nigerian FMOH and WHO clinical guidelines.
+"""
+from abc import abstractmethod
+
 from src.core.tools.base import ITool
+from src.domain.knowledge.service import IKnowledgeService
 from src.domain.patient.value_objects import DifferentialDiagnosis
-from src.domain.triage.service import IDifferentialDiagnosisTool
 from src.infrastructure.language_models.base import ILLMClient, Message, MessageRole, LLMConfig
-from src.infrastructure.knowledge.base import IKnowledgeStore
 from utils.logger import get_logger
 
 logger = get_logger()
 
 _SYSTEM_PROMPT = """
-You are a clinical decision support assistant trained on Nigerian FMOH guidelines
-and WHO protocols. Your task is to generate a ranked differential diagnosis list
-for a patient presentation.
+You are a clinical decision support assistant trained on Nigerian FMOH Standard 
+Treatment Guidelines and WHO protocols. Your task is to generate a ranked 
+differential diagnosis list for a patient presentation.
 
-Consider the Nigerian disease burden: malaria, typhoid, tuberculosis, and other
-endemic conditions must be appropriately weighted alongside global conditions.
+Consider the Nigerian disease burden — malaria, typhoid, tuberculosis, and 
+sickle cell disease must always be considered for relevant presentations.
 
 You must respond with a valid JSON object in exactly this format:
 {{
     "differentials": [
         {{
-            "rank": 1,
+            "rank": <integer starting at 1>,
             "condition": "<condition name>",
             "confidence": <float 0.0-1.0>,
-            "reasoning": "<why this condition fits this presentation>",
+            "reasoning": "<clinical reasoning>",
             "distinguishing_questions": ["<question1>", "<question2>"],
             "icd10_code": "<ICD-10 code or null>"
         }}
     ]
 }}
 
-Return exactly 5 differentials ordered by likelihood. 
+Return at most 5 differentials ordered by likelihood.
 Do not include any text outside the JSON object.
 """
 
 _USER_PROMPT = """
-Patient:
+Patient presentation:
 - Chief complaint: {chief_complaint}
-- Age: {age} years
-- Sex: {sex}
-- Symptom duration: {duration_hours} hours
+- Age: {age} years, {sex}
+- Duration: {duration_hours} hours
 - Additional history: {additional_history}
 
-Relevant guidelines and disease patterns:
+Relevant clinical guidelines:
 {guidelines}
 
-Generate the differential diagnosis list.
+Generate the ranked differential diagnosis list.
 """
 
 
-class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
+class IDifferentialDiagnosisTool(ITool):
+    """
+    Interface for the differential diagnosis tool.
+    Exposed so the debug endpoint can depend on the abstraction.
+    """
 
-    def __init__(self, llm: ILLMClient, knowledge_store: IKnowledgeStore):
+    @abstractmethod
+    async def execute(
+        self,
+        chief_complaint: str,
+        age: int,
+        sex: str,
+        symptom_duration_hours: int,
+        additional_history: str | None = None,
+    ) -> list[DifferentialDiagnosis]:
+        raise NotImplementedError
+
+
+class DifferentialDiagnosisTool(IDifferentialDiagnosisTool):
+
+    def __init__(
+        self,
+        llm: ILLMClient,
+        knowledge_service: IKnowledgeService,
+    ):
         self._llm = llm
-        self._knowledge_store = knowledge_store
+        self._knowledge_service = knowledge_service
 
     @property
     def name(self) -> str:
@@ -62,8 +89,8 @@ class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
     def description(self) -> str:
         return (
             "Generate a ranked differential diagnosis list for a patient presentation. "
-            "Returns the top 5 most likely conditions with confidence scores, "
-            "clinical reasoning, and distinguishing questions for each."
+            "Returns up to 5 conditions ordered by likelihood with clinical reasoning, "
+            "distinguishing questions, and ICD-10 codes."
         )
 
     async def execute(
@@ -75,8 +102,8 @@ class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
         additional_history: str | None = None,
     ) -> list[DifferentialDiagnosis]:
         try:
-            guidelines = await self._knowledge_store.search(
-                query=f"{chief_complaint} differential diagnosis Nigeria",
+            guidelines = await self._knowledge_service.search(
+                query=f"differential diagnosis {chief_complaint} {age} year old {sex}",
                 top_k=5,
             )
             guidelines_text = "\n".join(
@@ -84,7 +111,10 @@ class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
                 for g in guidelines
             )
         except Exception as e:
-            logger.warning(f"Knowledge store unavailable: {e}")
+            logger.warning(
+                f"DifferentialDiagnosisTool: knowledge service unavailable: {e}. "
+                "Proceeding without guidelines."
+            )
             guidelines_text = "Guidelines unavailable."
 
         messages = [
@@ -105,7 +135,7 @@ class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
         try:
             response = await self._llm.complete_json(
                 messages=messages,
-                config=LLMConfig(temperature=0.2),
+                config=LLMConfig(temperature=0.1),
             )
 
             return [
@@ -117,7 +147,7 @@ class DifferentialDiagnosisTool(IDifferentialDiagnosisTool, ITool):
                     distinguishing_questions=d.get("distinguishing_questions", []),
                     icd10_code=d.get("icd10_code"),
                 )
-                for d in response["differentials"]
+                for d in response.get("differentials", [])
             ]
         except (KeyError, ValueError) as e:
             logger.error(f"DifferentialDiagnosisTool: malformed LLM response: {e}")

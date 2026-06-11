@@ -1,91 +1,152 @@
+"""
+Triage Service.
+Pure persistence coordination for triage results and patient briefs.
+Orchestration logic (agent execution, prompt registry) lives in
+TriagePatientUseCase.
+"""
 from uuid import UUID
 
 from src.domain.triage.entities import TriageResult, PatientBrief
 from src.domain.triage.service import ITriageService
-from src.domain.patient.entities import Intake
-from src.core.agents.base import IAgent
-from src.core.agents.protocols import TriageAgentInput
-from src.infrastructure.repository.triage_repository import (
+from src.domain.triage.repository import (
     ITriageResultRepository,
     IPatientBriefRepository,
 )
-from src.infrastructure.mcp.prompt_registry import PhoenixPromptRegistry
 from utils.logger import get_logger
 
 logger = get_logger()
 
-_TRIAGE_PROMPT_NAME = "triage-system-prompt"
-
 
 class TriageService(ITriageService):
     """
-    Owns the triage pipeline execution and triage persistence.
-    Fetches the current improvement notes from Phoenix before each run
-    and injects them into the agent input.
+    Owns triage result and patient brief persistence.
+    No agents, no tools, no LLM — those live in the use case.
     """
 
     def __init__(
         self,
-        triage_agent: IAgent,
         triage_result_repo: ITriageResultRepository,
         brief_repo: IPatientBriefRepository,
-        prompt_registry: PhoenixPromptRegistry,
     ):
-        self._agent = triage_agent
         self._triage_result_repo = triage_result_repo
         self._brief_repo = brief_repo
-        self._prompt_registry = prompt_registry
 
-    async def run_triage(self, intake: Intake) -> TriageResult:
-        # Fetch current improvement notes from Phoenix
-        # Falls back to empty string if Phoenix is unavailable
+    async def save_result(self, result: TriageResult) -> TriageResult:
+        """
+        Persist a triage result.
+
+        Args:
+            result: Completed TriageResult from the triage agent.
+
+        Returns:
+            Persisted TriageResult with database-assigned fields.
+
+        Raises:
+            Exception: On any database error.
+        """
         try:
-            improvement_notes = await self._prompt_registry.get_current_prompt(
-                _TRIAGE_PROMPT_NAME
+            saved = await self._triage_result_repo.create(result)
+            logger.info(
+                f"TriageService: saved result {saved.id} "
+                f"for patient {saved.patient_id}"
             )
+            return saved
         except Exception as e:
-            logger.warning(
-                f"TriageService: could not fetch improvement notes: {e}. "
-                "Proceeding without."
+            logger.error(
+                f"TriageService: failed to save result "
+                f"for patient {result.patient_id}: {e}"
             )
-            improvement_notes = None
+            raise
 
-        agent_input = TriageAgentInput(
-            intake=intake,
-            improvement_notes=improvement_notes,
-        )
+    async def get_result(self, patient_id: UUID) -> TriageResult | None:
+        """
+        Retrieve the most recent triage result for a patient.
 
-        output = await self._agent.run(agent_input)
+        Args:
+            patient_id: UUID of the patient.
 
-        if not output.result:
-            raise RuntimeError(
-                f"TriageService: agent returned no result for intake {intake.id}"
+        Returns:
+            Most recent TriageResult if found, None otherwise.
+
+        Raises:
+            Exception: On any database error.
+        """
+        try:
+            return await self._triage_result_repo.get_by_patient_id(patient_id)
+        except Exception as e:
+            logger.error(
+                f"TriageService: failed to get result "
+                f"for patient {patient_id}: {e}"
             )
+            raise
 
-        # Persist the result
-        saved_result = await self._triage_result_repo.create(output.result)
-        logger.info(
-            f"TriageService: triage complete for patient {intake.patient_id}. "
-            f"urgency={saved_result.urgency.level.label}"
-        )
-        return saved_result
+    async def get_result_by_intake(self, intake_id: UUID) -> TriageResult | None:
+        """
+        Retrieve a triage result by its associated intake.
 
-    async def assemble_brief(self, result: TriageResult) -> PatientBrief:
-        # if not output_brief := getattr(result, "_brief", None):
-        output_brief = getattr(result, "_brief", None)
-        if not output_brief:
-            raise RuntimeError(
-                "TriageService.assemble_brief: brief not attached to result. "
-                "Call run_triage first — the agent assembles the brief internally."
+        Args:
+            intake_id: UUID of the intake record.
+
+        Returns:
+            TriageResult if found, None otherwise.
+
+        Raises:
+            Exception: On any database error.
+        """
+        try:
+            return await self._triage_result_repo.get_by_intake_id(intake_id)
+        except Exception as e:
+            logger.error(
+                f"TriageService: failed to get result "
+                f"for intake {intake_id}: {e}"
             )
-        saved_brief = await self._brief_repo.create(output_brief)
-        logger.info(
-            f"TriageService: brief saved for patient {result.patient_id}"
-        )
-        return saved_brief
+            raise
+
+    async def save_brief(self, brief: PatientBrief) -> PatientBrief:
+        """
+        Persist a patient brief.
+
+        Args:
+            brief: Assembled PatientBrief from the assemble_brief tool.
+
+        Returns:
+            Persisted PatientBrief with database-assigned fields.
+
+        Raises:
+            Exception: On any database error.
+        """
+        try:
+            saved = await self._brief_repo.create(brief)
+            logger.info(
+                f"TriageService: saved brief {saved.id} "
+                f"for patient {saved.patient_id}"
+            )
+            return saved
+        except Exception as e:
+            logger.error(
+                f"TriageService: failed to save brief "
+                f"for patient {brief.patient_id}: {e}"
+            )
+            raise
 
     async def get_brief(self, patient_id: UUID) -> PatientBrief | None:
-        return await self._brief_repo.get_by_patient_id(patient_id)
+        """
+        Retrieve the most recent patient brief.
 
-    async def get_triage_result(self, patient_id: UUID) -> TriageResult | None:
-        return await self._triage_result_repo.get_by_patient_id(patient_id)
+        Args:
+            patient_id: UUID of the patient.
+
+        Returns:
+            Most recent PatientBrief if found, None otherwise.
+
+        Raises:
+            Exception: On any database error.
+        """
+        try:
+            return await self._brief_repo.get_by_patient_id(patient_id)
+        except Exception as e:
+            logger.error(
+                f"TriageService: failed to get brief "
+                f"for patient {patient_id}: {e}"
+            )
+            raise
