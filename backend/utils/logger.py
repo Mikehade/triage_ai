@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import logging
 import colorlog
 
+logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 
 def get_logger():
 

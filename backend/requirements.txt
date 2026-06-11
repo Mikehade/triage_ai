@@ -1,4 +1,4 @@
-fastapi==0.131.0
+fastapi==0.135.2
 colorlog==6.10.1
 dependency_injector==4.48.3
 SQLAlchemy==2.0.47
